@@ -1,0 +1,374 @@
+---
+title: "STA 260 Final Report"
+author: "Casey Liu"
+date: "2/21/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# preprocess
+```{r}
+setwd("/Users/yilanliu/Desktop/UCD/sta260/final/")
+mydata=read.table("J254627.csv",sep=",",header=TRUE)
+
+colnames(mydata)=c("releaseNumber","familyID","nFU",
+                   "ageHead","nChildren","headMarital",
+                   "lifeSat","totalDebt","educWife",
+                   "educHead","taxableIncome","FamilyIncome","educExp")
+dim(mydata)
+
+# all release number is 5, which means it's the most recent record with imputation result based on previous version. 
+
+#mydata=mydata[(mydata$totalDebt<00000)&(mydata$totalDebt>0),]
+mydata = mydata[,-c(1,2)]
+# nFU column -- good
+# age column 999 = NA
+mydata$ageHead[mydata$ageHead==999]<-NA
+
+# nChildren --- good ---- too many/ zero-inflation?
+# headMarital ---- NA
+mydata$headMarital[mydata$headMarital==9 | mydata$headMarital==8]<-NA
+# LifeSat
+mydata$lifeSat[mydata$lifeSat == 8 | mydata$lifeSat == 9 | mydata$lifeSat == 0] <-NA
+# totalDebt
+mydata$totalDebt[mydata$totalDebt == 999999998 | mydata$totalDebt == 999999999| mydata$totalDebt == 0] = NA
+# EduWife
+mydata$educWife[mydata$educWife == 98 | mydata$educWife == 99 | mydata$educWife == 0] = NA
+# EduHead
+mydata$educHead[mydata$educHead == 98 | mydata$educHead == 99 | mydata$educHead == 0] = NA
+# taxableIncome ---- dubious
+# FamilyIncome ----dubious
+# educExp --- okay
+
+mydata$headMarital = as.factor(mydata$headMarital)
+mydata$lifeSat = as.factor(mydata$lifeSat)
+mydata$educWife = as.factor(mydata$educWife)
+mydata$educHead = as.factor(mydata$educHead)
+
+summary(mydata)
+df = mydata
+
+```
+
+
+# data imputation
+```{r}
+library(readr)
+library(mice)
+#df = read.csv("debt_raw.csv")
+#df = df[,c(-1)]
+summary(df)
+#colnames(df)=c("nFU","ageHead","nChildren","headMarital",
+#                   "lifeSat","totalDebt","educWife",
+#                   "educHead","taxableIncome","FamilyIncome","educExp")
+library(VIM)
+aggr_plot <- aggr(df, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(df)
+                  , cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+```
+```{r}
+tempData <- mice(df,m=5,maxit=50,meth='pmm',seed=500)
+stripplot(tempData, pch = 20, cex = 0.01)
+completedData <- complete(tempData,1)
+write.csv(completedData, "debt_raw.csv")
+summary(completedData)
+df = completedData
+```
+
+
+# analysis
+```{r}
+library(lawstat)
+library(MASS)
+
+assumption_check = function(model){
+  par(mfrow=c(1,1))
+  r_p = residuals(model, type="pearson")
+  r_d = residuals(model, type="deviance")
+  do.call(rbind, Map(data.frame, pearson_residual=r_p, deviance_residual=r_d))
+  boxplot(cbind(r_p, r_d), labels = c("Pearson residual", "Deviance residual"), main = "Boxplot for deviance")
+  
+  y_hat = model$fitted.values
+  par(mfrow=c(1,2))
+  plot(y_hat, r_p, pch=16, cex=0.6, ylab='Pearson Residuals',
+       xlab='Fitted Values',
+       main = "Pearson Residuals v.s. Fitted Values")
+  lines(smooth.spline(y_hat, r_p, spar=0.9))
+  abline(h=0, lty=2, col='grey')
+  plot(y_hat, r_d, pch=16, cex=0.6, ylab='Deviance Residuals', 
+       xlab='Fitted Values',
+       main = "Deviance Residuals v.s. Fitted Values")
+  lines(smooth.spline(y_hat, r_d, spar=0.9))
+  abline(h=0, lty=2, col='grey')
+  print(runs.test(y = r_p, plot.it = FALSE))
+  print(runs.test(y = r_d, plot.it = FALSE))
+}
+
+outlier_check = function(model, dataset, standard_cooks){
+  par(mfrow=c(1,2))
+  # leverage points => influential points
+  
+  leverage = hatvalues(model)
+  plot(names(leverage), leverage, xlab="Index", type="h", main = "Leverage plot")
+  points(names(leverage), leverage, pch=16, cex=0.6)
+  p <- length(coef(model))
+  n <- nrow(dataset)
+  abline(h=2*p/n,col=2,lwd=2,lty=2)
+  infPts <- which(leverage>2*p/n)
+  
+  cooks = cooks.distance(model)
+  
+  plot(cooks, ylab="Cook's Distance", pch=16, cex=0.6,main = "Cook's Distance")
+  points(infPts, cooks[infPts], pch=17, cex=0.8, col=2)
+  #text(infPts, cooks[infPts],  cex= 0.7, pos = 2)
+  infPts[cooks[infPts]>standard_cooks]
+  #cooks[infPts]>standard_cooks
+  #text(x=1:length(cooks)+1, y=cooks, labels=ifelse(cooks>standard_cooks, names(cooks),""), col="red")  # add labels
+  #susPts <- as.numeric(names(sort(cooks[cooks>standard_cooks], decreasing=TRUE)))
+  #print(susPts)
+}
+```
+
+a.) glm
+```{r}
+df = read.csv("debt_raw.csv")
+df = df[,c(-1)]
+summary(df)
+
+df$headMarital = as.factor(df$headMarital)
+df$lifeSat = as.factor(df$lifeSat)
+df$educWife = as.factor(df$educWife)
+df$educHead = as.factor(df$educHead)
+continous_df = df[,c(1,2,3,6,9,10,11)]
+summary(continous_df)
+library(corrplot)
+corrplot(cor(continous_df), type="lower", method = "number")
+# notice nChildren and nFU has corr = 0.86, FamilyIncome and taxableincome = .98
+# thus we decide to delete nChildren and taxableIncome
+df = df[,c(-3, -9)]
+summary(df)
+#corrplot(cor(df), type="lower", method = "number")
+# there is still some correlation in data 
+# however to decide to continue computing our result based on this 
+# Note the response looks like a gamma distribution with lots of zeros
+```
+
+# Data Transformation, histogram suggest to use log transformation
+https://stats.stackexchange.com/questions/47840/linear-model-with-log-transformed-response-vs-generalized-linear-model-with-log
+based on this, we decided to use log link in gaussian distribution, instead of take log transformation directly. 
+```{r}
+par(mfrow = c(1,2))
+hist(df$totalDebt, main = "raw totalDebt", xlab = "totalDebt")
+hist(log(df$totalDebt), main = "log totalDebt", xlab = "totalDebt")
+#df$totalDebt = log(log(df$totalDebt))
+
+```
+
+# Outliers detection using Normal distribution
+```{r}
+summary(df)
+continous_df = df[,c(1,2,5,8,9)]
+plot(continous_df)
+```
+```{r}
+summary(df)
+```
+
+
+```{r}
+glm_1 = glm(formula = totalDebt~., family=gaussian(link = log), data = df)
+assumption_check(glm_1) # runs = 0.1173
+dim(df) # 8690    9
+outlier_check(glm_1, df, 0.02)
+# reomve those outliers
+
+df = df[-c(20, 64, 263, 473, 1277, 1552, 2508, 3160, 3344, 3380, 3550, 3777, 3899, 4319, 4352, 4544, 5369, 5928, 6765 ,8009 ),]
+dim(df) # 8678    9
+
+glm_2 = glm(formula = totalDebt~., family=gaussian(link = log), data = df)
+outlier_check(glm_2, df, 0.025)
+assumption_check(glm_2) # runs =  0.01711
+summary(glm_2)
+write.csv(df, "debt.csv")
+```
+
+
+(Delete) Outliers detection using tweedie distribution 
+```{r}
+#df = read.csv("debt.csv")
+#df = df[,c(-1, -3, -9)]
+library(statmod)
+glm_1 = glm(formula = totalDebt~., family=tweedie(var.power=1.1, link.power=0), data = df)
+assumption_check(glm_1)
+dim(df) # 8690    9
+outlier_check(glm_1, df, 0.005)
+# thus observation 535, 197, 477, 309, 450, 478, 458, 197, 504 is influential outlier, 
+# reomve those outliers
+df = df[-c(3068,4528,6925,7065,7418,7428,7698,7783,8316),]
+dim(df) # 8681    9
+
+glm_2 = glm(formula = totalDebt~., family=tweedie(var.power=1.1, link.power=0), data = df)
+outlier_check(glm_2, df, 0.005)
+assumption_check(glm_2)
+summary(glm_2)
+write.csv(completedData, "debt.csv")
+
+```
+
+# split data into train and test
+```{r}
+df = read.csv("debt.csv")
+df = df[,-c(1)]
+df$headMarital = as.factor(df$headMarital)
+df$lifeSat = as.factor(df$lifeSat)
+df$educWife = as.factor(df$educWife)
+df$educHead = as.factor(df$educHead)
+summary(df)
+require(caTools)
+# https://rpubs.com/ID_Tech/S1
+set.seed(123)   #  set seed to ensure you always have same random numbers generated
+sample = sample.split(df,SplitRatio = 0.75) # splits the data in the ratio mentioned in SplitRatio. After splitting marks these rows as logical TRUE and the the remaining are marked as logical FALSE
+train =subset(df,sample ==TRUE) # creates a training dataset named train1 with rows which are marked as TRUE
+test=subset(df, sample==FALSE)
+length(train$totalDebt) # 5781
+dim(train)
+length(test$totalDebt) # 2889
+```
+
+```{r}
+summary(train$totalDebt)
+summary(test$totalDebt)
+par(mfrow = c(3,3))
+hist(df$nFU)
+hist(df$FamilyIncome)
+hist(df$educExp)
+plot(df$educHead)
+plot(df$educWife)
+plot(df$headMarital)
+plot(df$lifeSat)
+
+```
+
+
+
+basic glm model
+```{r}
+glm_1 = glm(formula = totalDebt~., family=gaussian(link = log), data = train)
+
+assumption_check(glm_1) # runs = 0.2867
+summary(glm_1)
+length(glm_1$coefficients)
+stepAIC(glm_1)
+
+# exclude nFu, ageHead, headMatital
+glm_aic = glm(formula = totalDebt ~ ageHead + lifeSat + educHead + FamilyIncome + 
+    educExp, family = gaussian(link = log), data = train)
+assumption_check(glm_aic) # runs = p-value = 0.08974
+summary(glm_aic)
+```
+
+
+gam::gam
+
+# check outliers for each parameter, individually. 
+```{r}
+library(gam)
+gam_cubic = gam::gam(totalDebt~ s(ageHead,5)+ lifeSat + educHead + s(FamilyIncome,5) + 
+    s(educExp,5), family = gaussian(link = log), data = train )
+
+outlier_check(gam_cubic, train, 0.05)
+#plot(mydata)
+par(mfrow=c(2,3))
+plot(gam_cubic)
+
+# thus include agehead as additive part
+
+gaplm_1 = gam::gam(totalDebt~ s(ageHead,5)+ lifeSat + educHead + FamilyIncome + 
+    educExp, family = gaussian(link = log), data = train )
+assumption_check(gaplm_1) # runs = 0.337
+summary(gaplm_1)
+```
+
+```{r}
+library(gam)
+gam_local <- gam::gam(totalDebt~ lo(ageHead,degree = 1)+ lifeSat + educHead + 
+                      lo(FamilyIncome,degree = 1) +  lo(educExp,degree = 1), 
+                    family = gaussian(link = log), data = train )
+par(mfrow=c(2,3))
+plot(gam_local)
+```
+# glm_aic2 include age^2 
+```{r}
+summary(glm_aic)
+glm_aic2 = glm(formula = totalDebt ~ ageHead + I(ageHead^2) + lifeSat + educHead + FamilyIncome + 
+    educExp, family = gaussian(link = log), data = train)
+assumption_check(glm_aic2) # runs = p-value = 0.05649
+summary(glm_aic2)
+```
+
+# interaction check 
+```{r}
+glm_aic2_interact= glm(formula = totalDebt ~ ageHead + I(ageHead^2) 
+                       + lifeSat + educHead + FamilyIncome + educExp
+                       + (ageHead + FamilyIncome + educExp) * (ageHead + FamilyIncome + educExp)
+                       , family = gaussian(link = log), data = train)
+assumption_check(glm_aic2_interact) # runs = 0.08022
+summary(glm_aic2_interact)
+anova(glm_aic, glm_aic2, test = "Chi")
+
+# likelihood ratio test
+# whether a reduced model is preferred
+#testing the null hypothesis that the slope parameter for interaction term is 0
+#and the small p-value indicates that the null model is rejected. 
+#Therefore, the larger model is more appropriate.
+anova( glm_aic2, glm_aic2_interact,test = "Chi")
+stepAIC(glm_aic2_interact)
+
+glm_interact = glm(formula = totalDebt ~ ageHead + I(ageHead^2) + lifeSat + 
+    educHead + FamilyIncome + educExp + ageHead:educExp + FamilyIncome:educExp, 
+    family = gaussian(link = log), data = train)
+anova( glm_interact, glm_aic2_interact,test = "Chi") #0.2925 thus glm_interact is preferred
+assumption_check(glm_interact) # runs = 0.07154
+
+summary(glm_interact)
+plot(glm_interact)
+```
+
+# potential model: glm_interact, gaplm_1, compare mse using test set
+
+```{r}
+library(caret)
+prediction_check = function(model){
+  pred_aic1 = predict(model, newdata = test, type="response")
+   mean((test$totalDebt - pred_aic1)^2) 
+}
+prediction_check(glm_interact) # 998,893,844 thus smaller 
+prediction_check(gaplm_1) # 1,014,720,020
+```
+
+```{r}
+model = c("glm","gaplm",  "Decision Tree", "SVM", "Random Forest", "KNN", "NN")
+mse = c(998893844, 1014720020, 1180348295, 1194468569, 1231921022,1178995799, 1194438189)
+mse_table <- data.frame( mse, row.names = model)
+
+library(ggplot2)
+
+ggplot(mse_table, aes(x=rownames(mse_table), mse)) + geom_bar(stat='identity') +
+  ggtitle("  MSE Plot") +xlab("models") + ylab("mse") + theme(
+    plot.title = element_text(size=25, face="bold.italic"),
+    axis.title.x = element_text( size=14, face="bold"),
+    axis.title.y = element_text(size=14, face="bold")
+  )
+
+```
+
+```{r}
+library(knitr)
+purl("STA 260 Final Report.Rmd", output = "STA 260 Final Report.R", documentation = 2)
+```
+
+
